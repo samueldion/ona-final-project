@@ -1,5 +1,5 @@
 ---
-title: "Exercise 3 - Advice Network at USPTO"
+title: "Final Project Work"
 author: "Samuel"
 date: '2022-05-18'
 output: 
@@ -717,22 +717,35 @@ kable(df %>% head())
 ```
 
 
+
+## Filter Outliers
+```{r}
+df_filter <- df %>% filter(!(abs(app_proc_time-median(app_proc_time))>2*sd(app_proc_time)))
+
+```
+
+
+
+
+
 # Create linear regression for the processing time
 
 ## Check the processing time data
 ```{r}
-p1 <- ggplot(data=df)+geom_histogram(aes(x=app_proc_time), col="white", fill="blue")
-p2 <- ggplot(data=df)+geom_histogram(aes(x=log(app_proc_time)), col="white", fill="red")
+p1 <- ggplot(data=df_filter)+geom_histogram(aes(x=app_proc_time), col="white", fill="blue")
+p2 <- ggplot(data=df_filter)+geom_histogram(aes(x=log(app_proc_time)), col="white", fill="red")
 gridExtra::grid.arrange(p1,p2)
 
 ```
 Maybe we should remove some outliers....
+Removing the outliers help the histogram a lot
+
 
 
 ## Simple Regression Model
 
 ```{r}
-lm.fit <- lm(data=df, app_proc_time~degree_in + degree_out+bet_centrality+clo_centrality)
+lm.fit <- lm(data=df_filter, app_proc_time~degree_in + degree_out+bet_centrality+clo_centrality)
 summary(lm.fit)
 
 
@@ -801,6 +814,16 @@ lm3.res = data.frame(resid(lm3.fit))
 ggplot(data=lm3.res, aes(sample=resid.lm3.fit.))+stat_qq()+stat_qq_line(col="blue")
 
 ```
+## Regression Attempt
+```{r}
+lm4.fit <- lm(data=df, app_proc_time~degree_out)
+
+summary(lm4.fit)
+
+```
+
+
+
 
 
 ## Plotting the results of the most recent linear model
