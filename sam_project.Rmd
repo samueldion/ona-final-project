@@ -570,7 +570,7 @@ edges_filter2 <- edges_filter%>%
   mutate(race_advice = ifelse(race.x == race.y, "same", "diff"),
          gender_advice = ifelse(gender.x == gender.y, "same", "diff"))
 
-edges_filter %>% head()
+edges_filter2 %>% head()
 
 ```
 
@@ -772,7 +772,7 @@ This tells me that I should use a log transformation of the processing time.
 ## Regression Model with Race and Gender
 
 ```{r}
-lm2.fit <- lm(data=df, log(app_proc_time)~degree_in+degree_out+bet_centrality+clo_centrality
+lm2.fit <- lm(data=df, (app_proc_time)~degree_in+degree_out+bet_centrality+clo_centrality
               )
 
 summary(lm2.fit)
@@ -816,7 +816,7 @@ ggplot(data=lm3.res, aes(sample=resid.lm3.fit.))+stat_qq()+stat_qq_line(col="blu
 ```
 ## Regression Attempt
 ```{r}
-lm4.fit <- lm(data=df, app_proc_time~degree_out)
+lm4.fit <- lm(data=df, app_proc_time~tenure_days)
 
 summary(lm4.fit)
 
@@ -866,8 +866,9 @@ related to the centrality scores of the examiner.
 
 
 
-
-
+--------------------------------------------------------------------------------
+# CLEAN REGRESSION WITH STARGAZER:
+Final regressions of the model.
 
 
 
