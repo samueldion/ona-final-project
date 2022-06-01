@@ -24,30 +24,6 @@ library(arrow)
 library(extrafont)
 ```
 
-## Instructions
-
-1.  Load the files and add the following variables for examiners:
-
--   Gender
--   Race
--   Tenure
-
-1.  Pick two workgroups you want to focus on (remember that a workgroup
-    is represented by the first 3 digits of `examiner_art_unit` value)
-    -   How do they compare on examiners' demographics? Show summary
-        statistics and plots.
-2.  Create advice networks from `edges_sample` and calculate centrality
-    scores for examiners in your selected workgroups
-
--   Pick measure(s) of centrality you want to use and justify your
-    choice
--   Characterize and discuss the relationship between centrality and
-    other examiners' characteristics
-
-Any types of visuals to understand the data. Look for tendencies.
-
-<https://github.com/romangalperin/2022-ona-assignments/blob/main/exercises/ex3/exercise3.md>
-
 ## Load data
 
 Load the following data: + applications from `app_data_sample.parquet` +
@@ -247,7 +223,7 @@ rm(examiner_dates)
 gc()
 ```
 
-## Pick the two biggest workgroups
+## Show the biggest workgroups
 
 Check the unique examiner_art_unit
 
@@ -269,13 +245,11 @@ Filter the applications with the chosen units and filter out the NA
 gender and race
 
 ```{r}
-app_filter <- applications %>% 
-  filter(examiner_art_unit3 %in% c("162", "179")) %>% drop_na(gender, race)
+app_filter <- applications %>% drop_na(gender, race) #%>% filter(examiner_art_unit3 %in% c("162", "179")) 
   
 ```
 
-Check different statistics per group
-
+Check different statistics with certain units
 ```{r}
 p1 <- app_filter %>% filter(examiner_art_unit3==162) %>% 
   count(race,gender) %>% 
@@ -294,6 +268,14 @@ gridExtra::grid.arrange(p1,p2)
 
 
 ```
+Global Applications By Gender and Race Globally
+```{r}
+app_filter %>%  
+  count(race,gender) %>% 
+  ggplot(aes(x=race, y=n, fill=gender))+
+  geom_col()+
+  labs(title="Applications by Gender and Race Globally")
+```
 
 Both groups are similar but the unit 179 has a higher proportion of
 white male compared to white female.
@@ -302,14 +284,14 @@ Quick check on the overall proportion of male/female advices in both
 groups
 
 ```{r}
-app_filter %>% group_by(examiner_art_unit3, gender) %>% 
+app_filter %>% group_by(gender) %>% 
   summarise(n = n()) %>% 
   mutate(prop = n/sum(n))
 
 ```
 
-Group 179 is composed of 63% male compared to group 162 composed of 50%
-male-female. **talking about applications proportions**
+
+
 
 ## Analysing the Advice Network with Graphs
 
@@ -354,7 +336,7 @@ edges_filter[!(edges_filter$alter_examiner_id %in% nodes$examiner_id),]
 Check if proportions were similar during the time period of interest
 
 ```{r}
-nodes %>% group_by(examiner_art_unit3, gender) %>% 
+nodes %>% group_by(gender) %>% 
   summarise(n = n()) %>% 
   mutate(prop = n/sum(n))
 
@@ -380,11 +362,11 @@ By Unit
 
 ```{r}
 ggraph(graph, layout = "kk") + 
-	 geom_edge_link(edge_colour = "#A8A8A8", edge_width = 0.3, edge_alpha = 1) + 
-    geom_node_point(aes(fill = examiner_art_unit3), colour = "#000000", size = 3, shape = 21, stroke = 0.3) + 
-	 scale_fill_brewer(palette = "Set1") + 
+	 geom_edge_link(edge_colour = "#A8A8A8", edge_width = 0.05, edge_alpha = 1) + 
+    geom_node_point(aes(fill = examiner_art_unit3), colour = "#000000", size = 2, shape = 21, stroke = 0.2) + 
+	 scale_fill_brewer(palette = "Spectral") + 
 	 theme_graph() + 
-	 theme(legend.position = "bottom")+
+	 theme(legend.position = "none")+
   labs(title="Advice Net by Unit")
 ```
 
@@ -468,6 +450,8 @@ Even if the distribution is 60-40 in favor of male and female, we can
 see that in general, men seem to have a higher degree centrality. The
 exact reason why is unknown.
 
+
+--------------------------------------------------------------------------------
 ### Analysing with a dataframe
 
 #### Highest centrality for examiner
@@ -555,9 +539,19 @@ gridExtra::grid.arrange(p1,p2)
 Surprisingly similar results even after normalizing by the number of
 tenure days.
 
+
+
+
+
+
+
+
+
+
+
 ------------------------------------------------------------------------
 
-# EXTRA FOR THE GROUP PROJECT
+# GROUP PROJECT EXTRAS
 
 ## Prepare the data
 
@@ -644,39 +638,24 @@ graph2_df %>%
 
 ```
 
-What we can see here is that blacks represents only 1% of the output
-requests, but blacks make 20% of their requests to same race
-individuals. We see similar phenomenon where each groups have a tendency
-to make more requests to their same group.
-
-# Export Data for Exercise 4
-
-```{r}
-#write.csv(graph_df[,1:10], "graph_df.csv", row.names = F)
-#write.csv(graph2_df %>% select(-eig_centrality), "graph2_df.csv", row.names = F)
-#write.csv(app_filter, "applications.csv", row.names = F)
-
-```
 
 ------------------------------------------------------------------------
 
 # REGRESSION SECTION (ex4)
 
 
-
-# Import data from exercise 
-The applications that are filtered and the nodes with their centrality scores
+# Create new variables
 
 ```{r}
-app <- read.csv("applications.csv")
+app <- app_filter
 #exam <- read.csv("../ex3/graph_df.csv")
-exam <- read.csv("graph2_df.csv")
+exam <- graph2_df
 
 ```
 
 ```{r}
+app$examiner_id <- as.character(app$examiner_id)
 app %>% head()
-
 ```
 
 
@@ -726,19 +705,18 @@ df_filter <- df %>% filter(!(abs(app_proc_time-median(app_proc_time))>2*sd(app_p
 
 
 
-
-
-# Create linear regression for the processing time
-
-## Check the processing time data
+# Check the processing time data
 ```{r}
 p1 <- ggplot(data=df_filter)+geom_histogram(aes(x=app_proc_time), col="white", fill="blue")
 p2 <- ggplot(data=df_filter)+geom_histogram(aes(x=log(app_proc_time)), col="white", fill="red")
-gridExtra::grid.arrange(p1,p2)
+gridExtra::grid.arrange(p1,p2, top = grid::textGrob("Comparing Application Processing Time Distribution - Outliers Removed"))
+
+p1 <- ggplot(data=df)+geom_histogram(aes(x=app_proc_time), col="white", fill="blue")
+p2 <- ggplot(data=df)+geom_histogram(aes(x=log(app_proc_time)), col="white", fill="red")
+gridExtra::grid.arrange(p1,p2, top = grid::textGrob("Comparing Application Processing Time Distribution - With Outliers"))
 
 ```
-Maybe we should remove some outliers....
-Removing the outliers help the histogram a lot
+Removing the outliers is needed
 
 
 
@@ -772,7 +750,7 @@ This tells me that I should use a log transformation of the processing time.
 ## Regression Model with Race and Gender
 
 ```{r}
-lm2.fit <- lm(data=df, (app_proc_time)~degree_in+degree_out+bet_centrality+clo_centrality
+lm2.fit <- lm(data=df_filter, (app_proc_time)~degree_in+degree_out+bet_centrality+clo_centrality
               )
 
 summary(lm2.fit)
@@ -792,7 +770,7 @@ Using the log transformation we can see that it is a lot better.
 ## Regression with Gender and Race interaction
 
 ```{r}
-lm3.fit <- lm(data=df, log(app_proc_time)~degree_in+degree_out+bet_centrality+clo_centrality+
+lm3.fit <- lm(data=df_filter, (app_proc_time)~degree_in+degree_out+bet_centrality+clo_centrality+
                 gender+race + gender*clo_centrality + race*clo_centrality+
                 gender*degree_all + race*degree_all + gender*race + examiner_art_unit3
               )
@@ -816,7 +794,8 @@ ggplot(data=lm3.res, aes(sample=resid.lm3.fit.))+stat_qq()+stat_qq_line(col="blu
 ```
 ## Regression Attempt
 ```{r}
-lm4.fit <- lm(data=df, app_proc_time~tenure_days)
+df_filter$tenure_years <- df_filter$tenure_days/365
+lm4.fit <- lm(data=df_filter, app_proc_time~tenure_years)
 
 summary(lm4.fit)
 
