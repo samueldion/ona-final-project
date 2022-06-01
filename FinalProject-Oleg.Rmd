@@ -1,0 +1,305 @@
+---
+title: "Final-Oleg"
+author: "Oleg Kartavtsev"
+date: "5/31/2022"
+output: github_document
+---
+
+### 1. Loading and pre-processing the data
+
+First, we load the data
+```{r}
+library(arrow)
+library(readr)
+applications <- read_parquet(paste0('C:\\Users\\oleg1\\Desktop\\McGill\\Classes\\Organizational Network Analysis\\app_data_sample.parquet'))
+edges <- read_csv(paste0('C:\\Users\\oleg1\\Desktop\\McGill\\Classes\\Organizational Network Analysis\\edges_sample.csv'))
+
+
+applications
+edges
+```
+
+As mentioned in the previous exercises, we use the "gender" package to estimate the gender of the employees
+```{r}
+library(gender)
+library(lubridate)
+library(tidyverse)
+library(dplyr)
+# get examiner names
+examiner_names <- applications %>% 
+  distinct(examiner_name_first)
+
+# get gender from their names
+examiner_names_gender <- examiner_names %>% 
+  do(results = gender(.$examiner_name_first, method = "ssa")) %>% 
+  unnest(cols = c(results), keep_empty = TRUE) %>% 
+  select(
+    examiner_name_first = name,
+    gender,
+    proportion_female
+  )
+
+# remove extra columns from the gender table
+examiner_names_gender <- examiner_names_gender %>% 
+  select(examiner_name_first, gender)
+
+# joining gender back to the dataset
+applications <- applications %>% 
+  left_join(examiner_names_gender, by = "examiner_name_first")
+
+# cleaning up
+rm(examiner_names)
+rm(examiner_names_gender)
+gc()
+
+
+```
+
+Estimating race
+
+```{r}
+library(wru)
+
+examiner_surnames <- applications %>% 
+  select(surname = examiner_name_last) %>% 
+  distinct()
+
+examiner_race <- predict_race(voter.file = examiner_surnames, surname.only = T) %>% 
+  as_tibble()
+
+examiner_race <- examiner_race %>% 
+  mutate(max_race_p = pmax(pred.asi, pred.bla, pred.his, pred.oth, pred.whi)) %>% 
+  mutate(race = case_when(
+    max_race_p == pred.asi ~ "Asian",
+    max_race_p == pred.bla ~ "black",
+    max_race_p == pred.his ~ "Hispanic",
+    max_race_p == pred.oth ~ "other",
+    max_race_p == pred.whi ~ "white",
+    TRUE ~ NA_character_
+  ))
+
+examiner_race <- examiner_race %>% 
+  select(surname,race)
+
+applications <- applications %>% 
+  left_join(examiner_race, by = c("examiner_name_last" = "surname"))
+
+rm(examiner_race)
+rm(examiner_surnames)
+gc()
+```
+
+adding tenure
+```{r}
+examiner_dates <- applications %>% 
+  select(examiner_id, filing_date, appl_status_date) 
+
+examiner_dates
+
+examiner_dates <- examiner_dates %>% 
+  mutate(start_date = ymd(filing_date), end_date = as_date(dmy_hms(appl_status_date)))
+
+examiner_dates <- examiner_dates %>% 
+  group_by(examiner_id) %>% 
+  summarise(
+    earliest_date = min(start_date, na.rm = TRUE), 
+    latest_date = max(end_date, na.rm = TRUE),
+    tenure_days = interval(earliest_date, latest_date) %/% days(1)
+    ) %>% 
+  filter(year(latest_date)<2018)
+
+examiner_dates
+
+applications <- applications %>% 
+  left_join(examiner_dates, by = "examiner_id")
+
+rm(examiner_dates)
+gc()
+```
+
+At this point, we drop the null_values to help the quality of the analysis
+```{r}
+applications <- drop_na(applications, tenure_days)
+
+applications <- drop_na(applications, filing_date)
+
+applications <- drop_na(applications, gender)
+```
+
+Specify the date when the employee finished working on the application
+```{r}
+applications <- applications %>% 
+  mutate(patent_issue_date = coalesce(patent_issue_date, abandon_date))
+names(applications)[11] <- "end_date"
+```
+
+```{r}
+#changing the format of the date column
+applications$filing_date <- strptime(as.Date(applications$filing_date), "%Y-%m-%d")
+applications$end_date <- strptime(as.Date(applications$end_date), "%Y-%m-%d")
+
+applications$app_proc_time0 <- as.Date(applications$end_date) - as.Date(applications$filing_date)
+
+
+
+```
+
+
+```{r}
+applications <- drop_na(applications, app_proc_time0)
+
+#removing negative date values
+remove <- c()
+negative <- 0
+zeroday1 <- as.difftime(negative, units = "days")
+
+for (i in c(1: nrow(applications))) {
+  if (applications$app_proc_time0[i] < zeroday1) {
+    remove = c(remove, i)
+  }
+}
+
+applications <- applications[-remove, ]
+```
+
+
+```{r}
+applications$app_proc_time <- as.numeric(applications$app_proc_time0, units="days")
+```
+
+## 2. Picking workgroups to work with and calculating their centralities
+
+Preparing the edges list
+```{r}
+edges <- drop_na(edges, ego_examiner_id)
+edges <-drop_na(edges, alter_examiner_id)
+
+edges <- inner_join(applications, edges, by = "application_number", copy = FALSE) 
+
+remove1 <- c()
+
+for (i in c(1: nrow(edges))) {
+  if ((edges$examiner_id[i] != edges$ego_examiner_id[i])&(edges$examiner_id[i] != edges$alter_examiner_id[i])) {
+    remove1 = c(remove1, i)
+  }
+}
+
+edges <- edges[-remove1, ]
+```
+
+Preparing the nodes list
+```{r}
+nodes_ego <- edges %>% 
+  distinct(ego_examiner_id) %>%
+  rename(examiner_id = ego_examiner_id)
+
+nodes_alter <- edges %>% 
+  distinct(alter_examiner_id) %>%
+  rename(examiner_id = alter_examiner_id)
+
+nodes <- union_all(nodes_ego, nodes_alter)
+
+nodes <- unique(nodes)
+
+#creating the edgelists
+edges_f <- edges %>% 
+  select(ego_examiner_id, alter_examiner_id)
+
+```
+
+Calculating the centralities for each workgroup and merging them into a single dataset
+```{r}
+library(ggplot2)
+library(igraph)
+library(ggraph)
+library(tidygraph)
+library(ggcorrplot)
+g_w <- graph_from_data_frame(edges_f, directed=TRUE)
+
+# degree centrality
+dg_w <- degree(g_w)
+
+# betweenness centrality
+bc_w <- betweenness(g_w)
+
+# closeness centrality
+cc_w <- closeness(g_w)
+
+# eigenvector centrality
+ei <- eigen_centrality(g_w)$vector
+
+centralities <- cbind(bc_w, dg_w, cc_w, ei)
+
+centralities_df <- cbind(nodes, centralities)
+
+head(centralities_df)
+```
+
+Join the centralities with app_proc_date and others on examiner ID
+
+```{r}
+processed <- inner_join(edges, centralities_df, by = "examiner_id", copy = FALSE)
+head(processed)
+```
+
+## 3. Fit linear regression
+
+Performing pre-processing
+```{r}
+
+to_drop2 <- c("application_number","examiner_name_first","examiner_name_last","examiner_name_middle","filing_date", "end_date", "abandon_date", "app_proc_time0", "appl_status_date", "advice_date","tc","ego_examiner_id","alter_examiner_id","examiner_id","patent_number")
+processed <- processed[ , !(names(processed) %in% to_drop2)]
+
+
+# as.factor
+processed$gender <- as.factor(processed$gender)
+processed$disposal_type <- as.factor(processed$disposal_type)
+processed$uspc_class <- as.factor(processed$uspc_class)
+processed$uspc_subclass <- as.factor(processed$uspc_subclass)
+processed$race <- as.factor(processed$race)
+
+# rename
+names(processed)[12] <- "betweenness"
+names(processed)[13] <- "degree"
+names(processed)[14] <- "closeness"
+names(processed)[15] <- "eigen"
+```
+
+### Fitting the model and printing the summary for group 163
+```{r}
+model <- lm(app_proc_time ~ betweenness+degree+closeness+eigen, data=processed)
+summary(model)
+```
+
+
+## 5. Including Gender, Race and Tenure
+```{r}
+model_full <- lm(app_proc_time ~ gender*race*tenure_days*betweenness+gender*degree+gender*closeness+gender*eigen, data=processed)
+summary(model_gender)
+```
+### Checking the residuals
+
+```{r}
+lm.res = data.frame(resid(model_full))
+ggplot(data=lm.res, aes(sample=resid.model_full.))+stat_qq()+stat_qq_line(col="blue")
+```
+Using log transformation to fix the residual curve
+
+```{r}
+lm2.fit <- lm(data=processed, log(app_proc_time)~gender*race*tenure_days*betweenness+gender*degree+gender*closeness+gender*eigen
+              )
+
+summary(lm2.fit)
+```
+
+```{r}
+lm2.res = data.frame(resid(lm2.fit))
+ggplot(data=lm2.res, aes(sample=resid.lm2.fit.))+stat_qq()+stat_qq_line(col="blue")
+```
+
+
+```{r}
+mean(processed$betweenness)
+```
+
+^^^ I stopped here because it looks like centrality scores have a lot of outliers and strange values in general. I have to think about how to proceed with this and try to finish up tomorrow.
