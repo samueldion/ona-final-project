@@ -1,6 +1,6 @@
 ---
 title: "Final Project Work"
-author: "Samuel"
+author: "Group 2"
 date: '2022-05-18'
 output: 
   github_document: default
@@ -245,7 +245,7 @@ Filter the applications with the chosen units and filter out the NA
 gender and race
 
 ```{r}
-app_filter <- applications %>% drop_na(gender, race) #%>% filter(examiner_art_unit3 %in% c("162", "179")) 
+app_filter <- applications %>% drop_na(gender, race) #%>% filter(examiner_art_unit3 %in% c("179")) 
   
 ```
 
@@ -290,6 +290,11 @@ app_filter %>% group_by(gender) %>%
 
 ```
 
+```{r}
+app_filter %>% distinct(examiner_id, examiner_art_unit3, .keep_all=T) %>% arrange(examiner_id)
+
+
+```
 
 
 
@@ -302,7 +307,8 @@ app_filter %>% group_by(gender) %>%
 # with gender and race.
 un_app_nb = unique(app_filter$application_number)
 un_examiner_id = unique(app_filter$examiner_id)
-edges_filter <- edges %>% filter((application_number %in% un_app_nb) & 
+edges_filter <- edges %>% filter( (alter_examiner_id!=ego_examiner_id) &
+                                  (application_number %in% un_app_nb) & 
                                    (alter_examiner_id %in% un_examiner_id) & 
                                    (ego_examiner_id %in% un_examiner_id)) %>%
     select(ego_examiner_id, alter_examiner_id, application_number, advice_date)
@@ -310,6 +316,7 @@ edges_filter <- edges %>% filter((application_number %in% un_app_nb) &
 # Create nodes file with left join of unique examiner id from edges list
 examiner_id <- unique(c(edges_filter$ego_examiner_id, edges_filter$alter_examiner_id))
 #examiner_id <- un_examiner_id
+
 nodes_temp <- data.frame(examiner_id)
 
 # Left join the nodes information
@@ -347,7 +354,7 @@ We have very similar proportions still.
 ### Creating the nodes and edges
 
 ```{r}
-graph <- igraph::graph_from_data_frame(edges_filter, vertices = nodes, directed = F) %>% as_tbl_graph()
+graph <- igraph::graph_from_data_frame(d = edges_filter, vertices = nodes, directed = T) %>% as_tbl_graph()
 #graph <- tbl_graph(edges = edges_filter, nodes=nodes, directed = T)
 
 ```
@@ -358,43 +365,28 @@ graph <- igraph::graph_from_data_frame(edges_filter, vertices = nodes, directed 
 autograph(graph)
 ```
 
-By Unit
 
-```{r}
+
+Unit 179 graph - RUN WITH SUBSET OF DATA NOT FULL DATA
+```{r, fig.show="hide"}
 ggraph(graph, layout = "kk") + 
 	 geom_edge_link(edge_colour = "#A8A8A8", edge_width = 0.05, edge_alpha = 1) + 
-    geom_node_point(aes(fill = examiner_art_unit3), colour = "#000000", size = 2, shape = 21, stroke = 0.2) + 
-	 scale_fill_brewer(palette = "Spectral") + 
-	 theme_graph() + 
-	 theme(legend.position = "none")+
-  labs(title="Advice Net by Unit")
-```
-
-By Gender
-
-```{r}
-ggraph(graph, layout = "kk") + 
-	 geom_edge_link(edge_colour = "#A8A8A8", edge_width = 0.3, edge_alpha = 1) + 
-    geom_node_point(aes(fill = gender), colour = "#000000", size = 3, shape = 21, stroke = 0.3) + 
+    geom_node_point(aes(fill=race), colour = "#000000",shape=21, size = 3,  stroke = 0.3) + 
 	 scale_fill_brewer(palette = "Set1") + 
 	 theme_graph() + 
 	 theme(legend.position = "bottom")+
-  labs(title="Advice Net by Gender")
+  labs(title="Advice Net for Unit 179")
 
-```
 
-By Race
-
-```{r}
 ggraph(graph, layout = "kk") + 
-	 geom_edge_link(edge_colour = "#A8A8A8", edge_width = 0.3, edge_alpha = 1) + 
-    geom_node_point(aes(fill = race), colour = "#000000", size = 3, shape = 21, stroke = 0.3) + 
+	 geom_edge_link(edge_colour = "#A8A8A8", edge_width = 0.05, edge_alpha = 1) + 
+    geom_node_point(aes(fill=gender), colour = "#000000",shape=21, size = 3,  stroke = 0.3) + 
 	 scale_fill_brewer(palette = "Set1") + 
 	 theme_graph() + 
 	 theme(legend.position = "bottom")+
-  labs(title="Advice Net by Race")
-
+  labs(title="Advice Net for Unit 179")
 ```
+
 
 ### Calculating Centrality Scores
 
@@ -416,35 +408,7 @@ V(graph)$eig_centrality <- eigen_centrality(graph)
 
 ```
 
-Advice net by race and degree centrality
 
-```{r}
-ggraph(graph, layout = "kk") + 
-	 geom_edge_link(edge_colour = "#A8A8A8", edge_width = 0.3, edge_alpha = 1) + 
-    geom_node_point(aes(fill = race, size = degree), colour = "#000000", shape = 21, stroke = 0.3) + 
-	 scale_fill_brewer(palette = "Set1") + 
-	 theme_graph() + 
-	 theme(legend.position = "bottom")+
-  labs(title="Advice Net by Race and Degree Centrality")
-
-```
-
-Obviously, we are seeing a stronger average degree centrality for white
-people compared to the other race. Could be due because they are more
-represented in the advice net.
-
-Advice net by gender and degree centrality
-
-```{r}
-ggraph(graph, layout = "kk") + 
-	 geom_edge_link(edge_colour = "#A8A8A8", edge_width = 0.3, edge_alpha = 1) + 
-    geom_node_point(aes(fill = gender, size = degree), colour = "#000000", shape = 21, stroke = 0.3) + 
-	 scale_fill_brewer(palette = "Set1") + 
-	 theme_graph() + 
-	 theme(legend.position = "bottom")+
-  labs(title="Advice Net by Race and Degree Centrality")
-
-```
 
 Even if the distribution is 60-40 in favor of male and female, we can
 see that in general, men seem to have a higher degree centrality. The
@@ -463,95 +427,10 @@ graph_df %>% arrange(desc(degree)) %>% head()
 
 ```
 
-We can see that Muhammad Siddiquee has the highest degree centrality in
-both units selected and David Joy has the best betweeness centrality.
-Looking at these numbers, I would say that David Joy seems to have the
-most request and also being on the shortest path between all the people
-in the network. He has a very centralized role and I think it makes
-sense for the context of the advice network.
-
-#### Centralities by gender and race
-
-```{r}
-p1 <- graph_df %>% group_by(gender, race) %>% 
-  summarise(degree_avg = median(degree), count=n()) %>% 
-  ggplot(aes(y=degree_avg, x = race, group=gender, fill=gender)) +
-  geom_bar(stat="identity", position = "dodge")+
-  geom_text(aes(label=count), vjust=1, position = position_dodge(width=0.9))+
-  labs(title="Median Degree Centrality by Gender and Race",
-       y="Degree Centrality",
-       subtitle = "Number indicates the sample size to compute the median")
-
-
-p2 <- graph_df %>% group_by(gender, race) %>% 
-  summarise(degree_avg = median(bet_centrality), count=n()) %>% 
-  ggplot(aes(y=degree_avg, x = race, group=gender, fill=gender)) +
-  geom_bar(stat="identity", position = "dodge")+
-  geom_text(aes(label=count), vjust=1, position = position_dodge(width=0.9))+
-  labs(title="Median Betweeness Centrality by Gender and Race",
-       y="Betweeness Centrality",
-       subtitle = "Number indicates the sample size to compute the median")
-
-gridExtra::grid.arrange(p1,p2)
-
-
-
-```
-
-Based on our sample size, it's hard to tell if there are any differences
-by race. However, there might be a pattern by gender if we are looking
-at the white and asian demographic with higher degree centrality median
-for both groups with a decent sample size.  
-We are seeing a similar pattern for the betweeness centrality where
-there is a clear distinction by gender. Even maybe by race but hard to
-tell.
-
-#### Centrality normalized by tenure days
-
-```{r}
-p1 <- graph_df %>% mutate(degree_norm = degree/(tenure_days+1)*365) %>%
-  group_by(gender, race) %>% 
-  summarise(degree_med = median(degree_norm, na.rm = T), count=n()) %>% 
-  ggplot(aes(y=degree_med, x = race, group=gender, fill=gender)) +
-  geom_bar(stat="identity", position = "dodge")+
-  geom_text(aes(label=count), vjust=1, position = position_dodge(width=0.9))+
-  labs(title="Median Degree Centrality by Gender and Race",
-       y="Degree Centrality",
-       subtitle = "Number indicates the sample size to compute the median")
-
-
-p2 <- graph_df %>% mutate(degree_norm = bet_centrality/(tenure_days+1)*365) %>%
-  group_by(gender, race) %>% 
-  summarise(degree_med = median(degree_norm, na.rm = T), count=n()) %>% 
-  ggplot(aes(y=degree_med, x = race, group=gender, fill=gender)) +
-  geom_bar(stat="identity", position = "dodge")+
-  geom_text(aes(label=count), vjust=1, position = position_dodge(width=0.9))+
-  labs(title="Median Betweeness Centrality Norm by Gender and Race",
-       y="Betweeness Centrality",
-       subtitle = "Number indicates the sample size to compute the median")
-
-gridExtra::grid.arrange(p1,p2)
-
-
-
-```
-
-Surprisingly similar results even after normalizing by the number of
-tenure days.
-
-
-
-
-
-
-
-
-
-
 
 ------------------------------------------------------------------------
 
-# GROUP PROJECT EXTRAS
+
 
 ## Prepare the data
 
@@ -603,7 +482,7 @@ graph2 <- graph2 %>%
   mutate(centrality_same_race = centrality_degree(weights = as.numeric(.E()$race_advice == "same"), mode="out"),
          centrality_diff_race = centrality_degree(weights = as.numeric(.E()$race_advice == "diff"), mode="out"),
          centrality_same_gender = centrality_degree(weights = as.numeric(.E()$gender_advice == "same"), mode="out"),
-         centrality_diff_gender = centrality_degree(weights = as.numeric(.E()$gender_advice == "diff"), mode="out"))  # requesting help from white person
+         centrality_diff_gender = centrality_degree(weights = as.numeric(.E()$gender_advice == "diff"), mode="out"))
 
 ```
 
@@ -612,8 +491,11 @@ graph2 <- graph2 %>%
 ### Baseline
 
 ```{r}
-edges_filter2 %>% group_by(race.y) %>% summarize(n=n()) %>% mutate(p=n/sum(n))
-edges_filter2 %>% group_by(gender.y) %>% summarize(n = n()) %>% mutate(p = n/sum(n))
+rr_bas <- edges_filter2 %>% group_by(race.y) %>% summarize(n=n()) %>% mutate(p=n/sum(n))
+gr_bas <- edges_filter2 %>% group_by(gender.y) %>% summarize(n = n()) %>% mutate(p = n/sum(n))
+
+rr_bas
+gr_bas
 
 ```
 
@@ -623,25 +505,91 @@ edges_filter2 %>% group_by(gender.y) %>% summarize(n = n()) %>% mutate(p = n/sum
 graph2_df <- as_data_frame(graph2, what="vertices")
 
 # Race Requests
-graph2_df %>% 
+rr <- graph2_df %>% 
   group_by(race) %>% 
   summarise(mean_out = mean(degree_out),
-            r_same_race = mean(centrality_same_race)/mean_out,
-            r_diff_race = mean(centrality_diff_race)/mean_out)
+            same = mean(centrality_same_race)/mean_out,
+            diff = mean(centrality_diff_race)/mean_out)
+rr
 
 # Gender Requests
-graph2_df %>% 
+gr <- graph2_df %>% 
   group_by(gender) %>% 
   summarise(mean_out = mean(degree_out),
-            r_same_gender = mean(centrality_same_gender)/mean_out,
-            r_diff_gender = mean(centrality_diff_gender)/mean_out)
+            same = mean(centrality_same_gender)/mean_out,
+            diff = mean(centrality_diff_gender)/mean_out)
+gr
+```
+
+## Show visual
+```{r, fig.width=5, fig.height=4}
+# GENDER
+barg <- c(gr_bas[[1,3]],NA, gr_bas[[2,3]], NA)
+gr %>% select(-mean_out) %>% pivot_longer(c(same, diff)) %>% ggplot(aes(x=gender, y = value, fill=name)) + geom_col()+
+  geom_errorbar(aes(y = barg, ymin = barg, ymax = barg, col = "Reference Line"),linetype = 2)+
+  labs(title = "Gender Advice Requests Proportions",
+       x = "Gender", y = "Percentage of Requests", fill="Advice Type", colour = "Reference Line")+
+  scale_colour_manual(name='', values=c("Reference Line" = "Black"))+
+  scale_y_continuous(labels = scales::percent)+
+  theme(legend.position = "bottom")
+
+# RACE
+barr <- c(rr_bas[[1,3]],NA,
+          rr_bas[[2,3]], NA,
+          rr_bas[[3,3]],NA,
+          rr_bas[[4,3]], NA)
+rr %>% select(-mean_out) %>% filter(race!="other") %>% pivot_longer(c(same, diff)) %>% ggplot(aes(x=race, y = value, fill=name)) + geom_col()+
+  geom_errorbar(aes(y = barr, ymin = barr, ymax = barr, col = "Reference Line"),linetype = 2)+
+  labs(title = "Race Advice Requests Proportions",
+       x = "Race", y = "Percentage of Requests", fill="Advice Type", colour = "Reference Line")+
+  scale_colour_manual(name='', values=c("Reference Line" = "Black"))+
+  scale_y_continuous(labels = scales::percent)+
+  theme(legend.position = "bottom")
+
+
+
+
+
+
+
+```
+
+```{r}
+gr_bas[[2,3]]
+```
+
+
+
+
+
+
+## Simple regression for the centrality score based on gender and race
+```{r}
+lm0.fit <- lm(data=graph2_df, degree_in ~ gender + race + tenure_days)
+summary(lm0.fit)
+
+lm02.fit <- lm(data=graph2_df, degree_out ~ gender + race + tenure_days)
+summary(lm02.fit)
+
+
+stargazer::stargazer(lm0.fit, lm02.fit, type="html", single.row = T, out = "table.html")
 
 ```
 
 
+
+
+
+
+
+
+
+
+
+
 ------------------------------------------------------------------------
 
-# REGRESSION SECTION (ex4)
+# REGRESSION SECTION for the Processing Time
 
 
 # Create new variables
@@ -703,8 +651,6 @@ df_filter <- df %>% filter(!(abs(app_proc_time-median(app_proc_time))>2*sd(app_p
 
 ```
 
-
-
 # Check the processing time data
 ```{r}
 p1 <- ggplot(data=df_filter)+geom_histogram(aes(x=app_proc_time), col="white", fill="blue")
@@ -716,7 +662,7 @@ p2 <- ggplot(data=df)+geom_histogram(aes(x=log(app_proc_time)), col="white", fil
 gridExtra::grid.arrange(p1,p2, top = grid::textGrob("Comparing Application Processing Time Distribution - With Outliers"))
 
 ```
-Removing the outliers is needed
+Removing the outliers is needed as shown in the figures above
 
 
 
@@ -728,13 +674,6 @@ summary(lm.fit)
 
 
 ```
-Using only the data from the centrality, we can see the statistical results.
-Someone with a higher degree centrality will have longer processing time.  
-Because of the data, that is someone that asks or has been asks a lot of 
-questions.  Betweeness centrality is also causing higher processing time and 
-only the closeness centrality is not.  So having a higher closeness centrality
-reduces the amount of processing time.
-
 
 Residuals plot
 ```{r}
@@ -742,101 +681,10 @@ lm.res = data.frame(resid(lm.fit))
 ggplot(data=lm.res, aes(sample=resid.lm.fit.))+stat_qq()+stat_qq_line(col="blue")
 
 ```
-This tells me that I should use a log transformation of the processing time.
+Tailed residuals
 
 
 
-
-## Regression Model with Race and Gender
-
-```{r}
-lm2.fit <- lm(data=df_filter, (app_proc_time)~degree_in+degree_out+bet_centrality+clo_centrality
-              )
-
-summary(lm2.fit)
-
-```
-
-Residuals plot
-```{r}
-lm2.res = data.frame(resid(lm2.fit))
-ggplot(data=lm2.res, aes(sample=resid.lm2.fit.))+stat_qq()+stat_qq_line(col="blue")
-
-```
-Using the log transformation we can see that it is a lot better.
-
-
-
-## Regression with Gender and Race interaction
-
-```{r}
-lm3.fit <- lm(data=df_filter, (app_proc_time)~degree_in+degree_out+bet_centrality+clo_centrality+
-                gender+race + gender*clo_centrality + race*clo_centrality+
-                gender*degree_all + race*degree_all + gender*race + examiner_art_unit3
-              )
-
-summary(lm3.fit)
-```
-Interestingly, the gender doesn't impact the processing time.  The Race as an 
-impact but is very minor and negligible.  In this example, the unit three digit
-number is added makes a significant difference.
-The coefficients are hard to estimate because of the processing time that is 
-reduced on a logarithmic base.
-
-
-
-
-Residuals plot
-```{r}
-lm3.res = data.frame(resid(lm3.fit))
-ggplot(data=lm3.res, aes(sample=resid.lm3.fit.))+stat_qq()+stat_qq_line(col="blue")
-
-```
-## Regression Attempt
-```{r}
-df_filter$tenure_years <- df_filter$tenure_days/365
-lm4.fit <- lm(data=df_filter, app_proc_time~tenure_years)
-
-summary(lm4.fit)
-
-```
-
-
-
-
-
-## Plotting the results of the most recent linear model
-
-```{r}
-pred <- exp(predict(lm3.fit, newdata=df))
-
-
-
-# Plot
-ggplot(data=df, aes(x=app_proc_time))+
-  geom_point(aes(y=pred))+
-  geom_abline(col="blue")+
-  labs(title="Terrible Predictions for the Patent Processing Time")
-
-```
-
-^^ Predictions are still pretty bad so I am not sure how those findings are 
-relevant to the USPTO ^^.  Some of the points discussed make sense but we
-are not able to explain the application processing time very precisely meaning
-that they are a lot of external factors that we haven't identified.
-
-Overall, we are seing that the closeness centrality (being as close as possible
-to most of the requests in this case) is very helpful in reducing processing 
-time.  In a sense it's logical because your are someone that probably plays a 
-very central strategic role and thus have more experience to solve problem 
-faster.  Only the degree centrality is too ambiguis and can mean that you are
-sending or receiving a lot of requests and what we are seing is that it's not 
-good in terms of processing time.
-
-The problem with this data, is that we are assuming that the examiner is the 
-owner of that patent but it's not necessarily true from my understanding which
-is not very representative and doesn't represent the processing time well 
-related to the centrality scores of the examiner.
 
 
 
