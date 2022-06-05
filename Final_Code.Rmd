@@ -1,0 +1,696 @@
+---
+title: "Final_Project_Code"
+author: "Samuel Dion & Oleg Kartavtsev"
+date: '2022-06-04'
+output: 
+  github_document: default
+  pdf_document: 
+    latex_engine: xelatex
+    keep_tex: yes
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = F)
+library(tidyverse)
+library(tidygraph)
+library(ggraph)
+library(igraph)
+library(lubridate)
+library(arrow)
+library(extrafont)
+library(kableExtra)
+```
+
+## Load data
+
+Load the following data: + applications from `app_data_sample.parquet` +
+edges from `edges_sample.csv`
+
+```{r load-data, include=F}
+# change to your own path!
+applications <- read_parquet(paste0('C:\\Users\\oleg1\\Desktop\\McGill\\Classes\\Organizational Network Analysis\\app_data_sample.parquet'))
+edges <- read_csv(paste0('C:\\Users\\oleg1\\Desktop\\McGill\\Classes\\Organizational Network Analysis\\edges_sample.csv'))
+#applications
+#edges
+```
+
+## Get gender for examiners
+
+We'll get gender based on the first name of the examiner, which is
+recorded in the field `examiner_name_first`. We'll use library `gender`
+for that, relying on a modified version of their own
+[example](https://cran.r-project.org/web/packages/gender/vignettes/predicting-gender.html).
+
+Note that there are over 2 million records in the applications table --
+that's because there are many records for each examiner, as many as the
+number of applications that examiner worked on during this time frame.
+Our first step therefore is to get all *unique* names in a separate list
+`examiner_names`. We will then guess gender for each one and will join
+this table back to the original dataset. So, let's get names without
+repetition:
+
+```{r gender-1}
+library(gender)
+#install_genderdata_package() # only run this line the first time you use the package, to get data for it
+# get a list of first names without repetitions
+examiner_names <- applications %>% 
+  distinct(examiner_name_first)
+examiner_names
+```
+
+Now let's use function `gender()` as shown in the example for the
+package to attach a gender and probability to each name and put the
+results into the table `examiner_names_gender`
+
+```{r gender-2}
+# get a table of names and gender
+examiner_names_gender <- examiner_names %>% 
+  do(results = gender(.$examiner_name_first, method = "ssa")) %>% 
+  unnest(cols = c(results), keep_empty = TRUE) %>% 
+  select(
+    examiner_name_first = name,
+    gender,
+    proportion_female
+  )
+examiner_names_gender
+```
+
+Finally, let's join that table back to our original applications data
+and discard the temporary tables we have just created to reduce clutter
+in our environment.
+
+```{r gender-3}
+# remove extra colums from the gender table
+examiner_names_gender <- examiner_names_gender %>% 
+  select(examiner_name_first, gender)
+# joining gender back to the dataset
+applications <- applications %>% 
+  left_join(examiner_names_gender, by = "examiner_name_first")
+# cleaning up
+rm(examiner_names)
+rm(examiner_names_gender)
+gc()
+```
+
+## Guess the examiner's race
+
+We'll now use package `wru` to estimate likely race of an examiner. Just
+like with gender, we'll get a list of unique names first, only now we
+are using surnames.
+
+```{r race-1}
+library(wru)
+examiner_surnames <- applications %>% 
+  select(surname = examiner_name_last) %>% 
+  distinct()
+examiner_surnames
+```
+
+We'll follow the instructions for the package outlined here
+<https://github.com/kosukeimai/wru>.
+
+```{r race-2}
+examiner_race <- predict_race(voter.file = examiner_surnames, surname.only = T) %>% 
+  as_tibble()
+examiner_race
+```
+
+As you can see, we get probabilities across five broad US Census
+categories: white, black, Hispanic, Asian and other. (Some of you may
+correctly point out that Hispanic is not a race category in the US
+Census, but these are the limitations of this package.)
+
+Our final step here is to pick the race category that has the highest
+probability for each last name and then join the table back to the main
+applications table. See this example for comparing values across
+columns: <https://www.tidyverse.org/blog/2020/04/dplyr-1-0-0-rowwise/>.
+And this one for `case_when()` function:
+<https://dplyr.tidyverse.org/reference/case_when.html>.
+
+```{r race-3}
+examiner_race <- examiner_race %>% 
+  mutate(max_race_p = pmax(pred.asi, pred.bla, pred.his, pred.oth, pred.whi)) %>% 
+  mutate(race = case_when(
+    max_race_p == pred.asi ~ "Asian",
+    max_race_p == pred.bla ~ "black",
+    max_race_p == pred.his ~ "Hispanic",
+    max_race_p == pred.oth ~ "other",
+    max_race_p == pred.whi ~ "white",
+    TRUE ~ NA_character_
+  ))
+examiner_race
+```
+
+Let's join the data back to the applications table.
+
+```{r race-4}
+# removing extra columns
+examiner_race <- examiner_race %>% 
+  select(surname,race)
+applications <- applications %>% 
+  left_join(examiner_race, by = c("examiner_name_last" = "surname"))
+rm(examiner_race)
+rm(examiner_surnames)
+gc()
+```
+
+## Examiner's tenure
+
+To figure out the timespan for which we observe each examiner in the
+applications data, let's find the first and the last observed date for
+each examiner. We'll first get examiner IDs and application dates in a
+separate table, for ease of manipulation. We'll keep examiner ID (the
+field `examiner_id`), and earliest and latest dates for each application
+(`filing_date` and `appl_status_date` respectively). We'll use functions
+in package `lubridate` to work with date and time values.
+
+```{r tenure-1}
+examiner_dates <- applications %>% 
+  select(examiner_id, filing_date, appl_status_date) 
+examiner_dates
+```
+
+The dates look inconsistent in terms of formatting. Let's make them
+consistent. We'll create new variables `start_date` and `end_date`.
+
+```{r tenure-2}
+examiner_dates <- examiner_dates %>% 
+  mutate(start_date = ymd(filing_date), end_date = as_date(dmy_hms(appl_status_date)))
+```
+
+Let's now identify the earliest and the latest date for each examiner
+and calculate the difference in days, which is their tenure in the
+organization.
+
+```{r tenure-3}
+examiner_dates <- examiner_dates %>% 
+  group_by(examiner_id) %>% 
+  summarise(
+    earliest_date = min(start_date, na.rm = TRUE), 
+    latest_date = max(end_date, na.rm = TRUE),
+    tenure_days = interval(earliest_date, latest_date) %/% days(1)
+    ) %>% 
+  filter(year(latest_date)<2018)
+examiner_dates
+```
+
+Joining back to the applications data.
+
+```{r tenure-4}
+applications <- applications %>% 
+  left_join(examiner_dates, by = "examiner_id")
+rm(examiner_dates)
+gc()
+```
+
+## Show the biggest workgroups
+
+Check the unique examiner_art_unit
+
+```{r}
+applications <- applications %>% 
+  mutate(examiner_art_unit3 = stringr::str_sub(examiner_art_unit, 1,3))
+applications %>% drop_na(gender, race) %>% 
+  group_by(examiner_art_unit3) %>% count() %>% 
+  arrange(desc(n)) %>% 
+  ggplot(aes(x = n,y = reorder(examiner_art_unit3, n)))+geom_col(fill="darkgreen")+
+  labs(y = "Examiner Group")
+```
+
+Will select group 162 and 179 because they are the biggest
+
+Filter the applications with the chosen units and filter out the NA
+gender and race
+
+```{r}
+app_filter <- applications %>% drop_na(gender, race) #%>% filter(examiner_art_unit3 %in% c("179")) 
+  
+```
+
+Check different statistics with certain units
+```{r}
+p1 <- app_filter %>% filter(examiner_art_unit3==162) %>% 
+  count(race,gender) %>% 
+  ggplot(aes(x=race, y=n, fill=gender))+
+  geom_col()+
+  labs(title="Unit: 162")
+p2 <- app_filter %>% filter(examiner_art_unit3==179) %>% 
+  count(race,gender) %>% 
+  ggplot(aes(x=race, y=n, fill=gender))+
+  geom_col()+
+  labs(title="Unit: 179")
+gridExtra::grid.arrange(p1,p2)
+```
+Global Applications By Gender and Race Globally
+```{r}
+app_filter %>%  
+  count(race,gender) %>% 
+  ggplot(aes(x=race, y=n, fill=gender))+
+  geom_col()+
+  labs(title="Applications by Gender and Race Globally")
+```
+
+Both groups are similar but the unit 179 has a higher proportion of
+white male compared to white female.
+
+Quick check on the overall proportion of male/female advices in both
+groups
+
+```{r}
+app_filter %>% group_by(gender) %>% 
+  summarise(n = n()) %>% 
+  mutate(prop = n/sum(n))
+```
+
+```{r}
+app_filter %>% distinct(examiner_id, examiner_art_unit3, .keep_all=T) %>% arrange(examiner_id)
+```
+
+
+
+## Analysing the Advice Network with Graphs
+
+### Filter the dataset
+
+```{r}
+# Filter the edges with the application number in our dataset and examiner_id 
+# with gender and race.
+un_app_nb = unique(app_filter$application_number)
+un_examiner_id = unique(app_filter$examiner_id)
+edges_filter <- edges %>% filter( (alter_examiner_id!=ego_examiner_id) &
+                                  (application_number %in% un_app_nb) & 
+                                   (alter_examiner_id %in% un_examiner_id) & 
+                                   (ego_examiner_id %in% un_examiner_id)) %>%
+    select(ego_examiner_id, alter_examiner_id, application_number, advice_date)
+# Create nodes file with left join of unique examiner id from edges list
+examiner_id <- unique(c(edges_filter$ego_examiner_id, edges_filter$alter_examiner_id))
+#examiner_id <- un_examiner_id
+nodes_temp <- data.frame(examiner_id)
+# Left join the nodes information
+nodes <- nodes_temp %>% left_join(app_filter %>% distinct(examiner_id, .keep_all=T), 
+                         by = c("examiner_id")) %>% 
+  select(examiner_id, gender, race, examiner_art_unit3, examiner_name_first, examiner_name_last, tenure_days)
+nodes %>% arrange(examiner_id) %>% 
+  head()
+```
+
+Check if all the edges are listed in the nodes list
+
+```{r, results='hide'}
+edges_filter[!(edges_filter$ego_examiner_id %in% nodes$examiner_id),]
+edges_filter[!(edges_filter$alter_examiner_id %in% nodes$examiner_id),]
+```
+
+Check if proportions were similar during the time period of interest
+
+```{r}
+nodes %>% group_by(gender) %>% 
+  summarise(n = n()) %>% 
+  mutate(prop = n/sum(n))
+```
+
+We have very similar proportions still.
+
+### Creating the nodes and edges
+
+```{r}
+graph <- igraph::graph_from_data_frame(d = edges_filter, vertices = nodes, directed = T) %>% as_tbl_graph()
+#graph <- tbl_graph(edges = edges_filter, nodes=nodes, directed = T)
+```
+
+#### Plot the results
+
+```{r}
+autograph(graph)
+```
+
+
+
+Unit 179 graph - RUN WITH SUBSET OF DATA NOT FULL DATA
+```{r, fig.show="hide"}
+ggraph(graph, layout = "kk") + 
+	 geom_edge_link(edge_colour = "#A8A8A8", edge_width = 0.05, edge_alpha = 1) + 
+    geom_node_point(aes(fill=race), colour = "#000000",shape=21, size = 3,  stroke = 0.3) + 
+	 scale_fill_brewer(palette = "Set1") + 
+	 theme_graph() + 
+	 theme(legend.position = "bottom")+
+  labs(title="Advice Net for Unit 179")
+ggraph(graph, layout = "kk") + 
+	 geom_edge_link(edge_colour = "#A8A8A8", edge_width = 0.05, edge_alpha = 1) + 
+    geom_node_point(aes(fill=gender), colour = "#000000",shape=21, size = 3,  stroke = 0.3) + 
+	 scale_fill_brewer(palette = "Set1") + 
+	 theme_graph() + 
+	 theme(legend.position = "bottom")+
+  labs(title="Advice Net for Unit 179")
+```
+
+
+### Calculating Centrality Scores
+
+```{r}
+# Clustering to see patterns (not working for directed graph)
+#V(graph)$clu <- as.character(membership(cluster_louvain(graph)))
+# Degree Centrality
+V(graph)$degree <- degree(graph)
+# Betweeness centrality
+V(graph)$bet_centrality <- betweenness(graph)
+# Closeness centrality
+V(graph)$clo_centrality <- closeness(graph)
+# Eigen Centrality
+V(graph)$eig_centrality <- eigen_centrality(graph)
+```
+
+
+
+Even if the distribution is 60-40 in favor of male and female, we can
+see that in general, men seem to have a higher degree centrality. The
+exact reason why is unknown.
+
+
+--------------------------------------------------------------------------------
+### Analysing with a dataframe
+
+#### Highest centrality for examiner
+
+```{r}
+graph_df <- as_data_frame(graph, what="vertices")
+graph_df %>% arrange(desc(bet_centrality)) %>% head()
+graph_df %>% arrange(desc(degree)) %>% head()
+```
+
+
+------------------------------------------------------------------------
+
+
+
+## Prepare the data
+
+Create edges attributes to know if it's multi-racial request or not
+
+```{r}
+edges_filter2 <- edges_filter%>% 
+  left_join(nodes %>% select(examiner_id, race, gender), by=c("ego_examiner_id"="examiner_id")) %>% 
+  left_join(nodes %>% select(examiner_id, race, gender), by=c("alter_examiner_id"="examiner_id")) %>% 
+  mutate(race_advice = ifelse(race.x == race.y, "same", "diff"),
+         gender_advice = ifelse(gender.x == gender.y, "same", "diff"))
+edges_filter2 %>% head()
+```
+
+Create a new graph
+
+```{r}
+graph2 <- graph_from_data_frame(edges_filter2, nodes, directed = T) %>% as_tbl_graph()
+```
+
+Recalculate the different centrality scores
+
+```{r}
+# Degree Centrality
+V(graph2)$degree_out <- degree(graph2, mode="out")
+V(graph2)$degree_in <- degree(graph2, mode="in")
+V(graph2)$degree_all <- degree(graph2, mode="all")
+# Betweeness centrality
+V(graph2)$bet_centrality <- betweenness(graph2)
+# Closeness centrality
+V(graph2)$clo_centrality <- closeness(graph2)
+# Eigen Centrality
+V(graph2)$eig_centrality <- eigen_centrality(graph2)
+```
+
+Calculate the centrality on type of request
+
+```{r}
+graph2 <- graph2 %>% 
+  activate(nodes) %>% 
+  mutate(centrality_same_race = centrality_degree(weights = as.numeric(.E()$race_advice == "same"), mode="out"),
+         centrality_diff_race = centrality_degree(weights = as.numeric(.E()$race_advice == "diff"), mode="out"),
+         centrality_same_gender = centrality_degree(weights = as.numeric(.E()$gender_advice == "same"), mode="out"),
+         centrality_diff_gender = centrality_degree(weights = as.numeric(.E()$gender_advice == "diff"), mode="out"))
+```
+
+## Visualize the results
+
+### Baseline
+
+```{r}
+rr_bas <- edges_filter2 %>% group_by(race.y) %>% summarize(n=n()) %>% mutate(p=n/sum(n))
+gr_bas <- edges_filter2 %>% group_by(gender.y) %>% summarize(n = n()) %>% mutate(p = n/sum(n))
+rr_bas
+gr_bas
+```
+
+### Divide by different characteristics
+
+```{r}
+graph2_df <- as_data_frame(graph2, what="vertices")
+# Race Requests
+rr <- graph2_df %>% 
+  group_by(race) %>% 
+  summarise(mean_out = mean(degree_out),
+            same = mean(centrality_same_race)/mean_out,
+            diff = mean(centrality_diff_race)/mean_out)
+rr
+# Gender Requests
+gr <- graph2_df %>% 
+  group_by(gender) %>% 
+  summarise(mean_out = mean(degree_out),
+            same = mean(centrality_same_gender)/mean_out,
+            diff = mean(centrality_diff_gender)/mean_out)
+gr
+```
+
+## Show visual
+```{r, fig.width=5, fig.height=4}
+# GENDER
+barg <- c(gr_bas[[1,3]],NA, gr_bas[[2,3]], NA)
+gr %>% select(-mean_out) %>% pivot_longer(c(same, diff)) %>% ggplot(aes(x=gender, y = value, fill=name)) + geom_col()+
+  geom_errorbar(aes(y = barg, ymin = barg, ymax = barg, col = "Reference Line"),linetype = 2)+
+  labs(title = "Gender Advice Requests Proportions",
+       x = "Gender", y = "Percentage of Requests", fill="Advice Type", colour = "Reference Line")+
+  scale_colour_manual(name='', values=c("Reference Line" = "Black"))+
+  scale_y_continuous(labels = scales::percent)+
+  theme(legend.position = "bottom")
+# RACE
+barr <- c(rr_bas[[1,3]],NA,
+          rr_bas[[2,3]], NA,
+          rr_bas[[3,3]],NA,
+          rr_bas[[4,3]], NA)
+rr %>% select(-mean_out) %>% filter(race!="other") %>% pivot_longer(c(same, diff)) %>% ggplot(aes(x=race, y = value, fill=name)) + geom_col()+
+  geom_errorbar(aes(y = barr, ymin = barr, ymax = barr, col = "Reference Line"),linetype = 2)+
+  labs(title = "Race Advice Requests Proportions",
+       x = "Race", y = "Percentage of Requests", fill="Advice Type", colour = "Reference Line")+
+  scale_colour_manual(name='', values=c("Reference Line" = "Black"))+
+  scale_y_continuous(labels = scales::percent)+
+  theme(legend.position = "bottom")
+```
+
+```{r}
+gr_bas[[2,3]]
+```
+
+
+
+
+
+
+## Simple regression for the centrality score based on gender and race
+```{r}
+lm0.fit <- lm(data=graph2_df, degree_in ~ gender + race + tenure_days)
+summary(lm0.fit)
+lm02.fit <- lm(data=graph2_df, degree_out ~ gender + race + tenure_days)
+summary(lm02.fit)
+stargazer::stargazer(lm0.fit, lm02.fit, type="html", single.row = T, out = "table.html")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+------------------------------------------------------------------------
+
+# REGRESSION SECTION for the Processing Time
+
+
+# Create new variables
+
+```{r}
+app <- app_filter
+#exam <- read.csv("../ex3/graph_df.csv")
+exam <- graph2_df
+```
+
+```{r}
+app$examiner_id <- as.character(app$examiner_id)
+app %>% head()
+```
+
+
+# Calculate the application processing time
+
+Abandon Date and Issue Date
+```{r}
+app %>% select(abandon_date,patent_issue_date) %>% head()
+```
+
+```{r}
+app <- app %>% 
+  filter(!(is.na(abandon_date) & is.na(patent_issue_date))) %>% 
+  mutate(app_proc_time = ifelse(
+  is.na(abandon_date), as.Date(patent_issue_date)-as.Date(filing_date), as.Date(abandon_date)-as.Date(filing_date)
+) )
+```
+
+# Combine applications data with the nodes
+```{r}
+df <- app %>% left_join(exam %>% select(name, degree_in, degree_out, degree_all, bet_centrality, clo_centrality), 
+                        by=c("examiner_id"="name")) %>% 
+  drop_na(degree_all) %>% filter(app_proc_time>0 & race!="other")  
+# some of the examiner weren't in the edges data file so their centrality
+# was not calculated
+df$examiner_art_unit3 <- as.factor(df$examiner_art_unit3)
+df$uspc_class <- as.factor(df$uspc_class)
+df$gender <- as.factor(df$gender)
+df$race <- as.factor(df$race)
+kable(df %>% head())
+```
+
+
+
+## Filter Outliers
+```{r}
+df_filter <- df %>% filter(!(abs(app_proc_time-median(app_proc_time))>2*sd(app_proc_time)))
+```
+
+# Check the processing time data
+```{r}
+p1 <- ggplot(data=df_filter)+geom_histogram(aes(x=app_proc_time), col="white", fill="blue")
+p2 <- ggplot(data=df_filter)+geom_histogram(aes(x=log(app_proc_time)), col="white", fill="red")
+gridExtra::grid.arrange(p1,p2, top = grid::textGrob("Comparing Application Processing Time Distribution - Outliers Removed"))
+p1 <- ggplot(data=df)+geom_histogram(aes(x=app_proc_time), col="white", fill="blue")
+p2 <- ggplot(data=df)+geom_histogram(aes(x=log(app_proc_time)), col="white", fill="red")
+gridExtra::grid.arrange(p1,p2, top = grid::textGrob("Comparing Application Processing Time Distribution - With Outliers"))
+```
+Removing the outliers is needed as shown in the figures above
+
+
+
+## Simple Regression Model
+
+```{r}
+lm.fit <- lm(data=df_filter, app_proc_time~degree_in + degree_out+bet_centrality+clo_centrality)
+summary(lm.fit)
+```
+
+Residuals plot
+```{r}
+lm.res = data.frame(resid(lm.fit))
+ggplot(data=lm.res, aes(sample=resid.lm.fit.))+stat_qq()+stat_qq_line(col="blue")
+```
+Tailed residuals
+
+
+----------------------
+# Regression Analysis
+
+### Pre-Processing
+```{r}
+drop <- ("examiner_art_unit3")
+df_filter1 <- drop_na(df_filter, clo_centrality)
+df_filter1 <- drop_na(df_filter1, tenure_days)
+#df_filter1 <- df_filter1[!is.na(df_filter1$app_proc_time)]
+df_filter1 <- drop_na(df_filter1, app_proc_time)
+#df_filter1 = df_filter1[!is.na(df_filter1$bet_centrality)]
+df_filter1 <- select(df_filter1, -drop)
+```
+
+### Creating centralities/graph
+```{r}
+g_w <- graph_from_data_frame(edges_filter, directed=TRUE)
+# degree centrality
+degree <- degree(g_w)
+# betweenness centrality
+betweenness <- betweenness(g_w)
+# closeness centrality
+closeness <- closeness(g_w)
+# eigenvector centrality
+eigenvector <- eigen_centrality(g_w)$vector
+centralities <- cbind(degree, closeness, eigenvector, betweenness)
+centralities_df_ <- cbind(nodes, centralities)
+head(centralities_df_)
+```
+
+### Joining 2 datasets
+
+```{r}
+join <- df_filter1[c(1,6,22,23,24)]
+model_df = merge(x=centralities_df_,y=join,by="examiner_id")
+model_df <- model_df %>% relocate(application_number)
+```
+
+### Correlation Matrix
+
+```{r}
+# ensure the results are repeatable
+set.seed(7)
+# load the library
+library(mlbench)
+library(caret)
+# calculate correlation matrix
+correlationMatrix <- cor(model_df[,8:15])
+# summarize the correlation matrix
+print(correlationMatrix)
+# find attributes that are highly corrected (ideally >0.75)
+highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.5)
+# print indexes of highly correlated attributes
+print(highlyCorrelated)
+```
+
+```{r}
+model_df$gender <- as.factor(model_df$gender)
+model_df$race <- as.factor(model_df$race)
+```
+
+### Creating models
+
+First model - Application Processing Time
+
+```{r}
+model_everything <- lm(app_proc_time ~ gender + race + tenure_days + degree + closeness + eigenvector + betweenness + degree_in + degree_out, data=model_df)
+summary(model_everything)
+```
+
+Second Model - Degree Out (Asking Advice)
+
+```{r}
+model_out <- lm(degree_out ~ app_proc_time + gender + race + tenure_days + closeness + eigenvector + degree_in, data=model_df)
+summary(model_out)
+```
+
+Third Model - Degree In (Giving Advice)
+
+```{r}
+model_in <- lm(degree_in ~ app_proc_time + gender + race + tenure_days + closeness + eigenvector + degree_out, data=model_df)
+summary(model_in)
+```
+
+
+
+--------------------------------------------------------------------------------
+# CLEAN REGRESSION WITH STARGAZER:
+Final regressions of the model.
+
+
+```{r}
+library(stargazer)
+stargazer(model_everything, model_out, model_in, title="Results of the Regression Analysis", type = "latex",  dep.var.labels = c("Processing Time", "Asking Advice", "Giving Advice"), single.row = TRUE, align=TRUE)
+```
